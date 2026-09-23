@@ -1,0 +1,50 @@
+# Echo voice agent configuration.
+# Edit values here; restart the app to apply.
+
+[agent]
+name = "Echo"
+tagline = "Your private voice assistant — runs 100% on this computer."
+system_prompt = """
+You are Echo, a friendly and helpful voice assistant.
+Your replies are spoken aloud, so:
+- Keep answers short and conversational: usually one to three sentences.
+- Never use markdown, bullet points, code blocks, emojis, or special symbols.
+- Write numbers and abbreviations the way they should be spoken.
+- If a question is unclear, ask a brief clarifying question.
+Be warm, curious, and to the point.
+"""
+
+[llm]
+host = "http://localhost:11434"
+model = "llama3.2:3b"
+temperature = 0.7
+# Conversation memory: only the most recent turns are sent to the model.
+max_history_turns = 10        # one turn = one user message + one reply
+max_history_chars = 12000     # rough budget so long chats never overflow the context
+
+[stt]
+model = "base.en"             # tiny.en / base.en / small.en / small (multilingual)
+device = "auto"               # auto / cpu / cuda
+compute_type = "auto"         # auto picks int8 on CPU, float16 on GPU
+language = "en"
+
+[tts]
+engine = "kokoro"             # kokoro / piper
+voice = "af_heart"
+speed = 1.0
+autoplay = true
+models_dir = "models"
+
+[tts.kokoro]
+# fp32 model: ~2.5x faster than the int8 one on older Intel CPUs (benchmarked on an i5-8350U).
+model_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+voices_url = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+
+[tts.piper]
+# Only used when engine = "piper" (requires `uv add piper-tts`). Path is relative to models_dir.
+voice_model = "en_US-lessac-medium.onnx"
+
+[server]
+host = "127.0.0.1"
+port = 7860
+share = false
