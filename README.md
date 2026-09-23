@@ -98,3 +98,4 @@ src/voice_agent/
 | Slow replies / pauses between sentences | The LLM and TTS share the CPU. Try `gemma3:1b` in Settings, or `tiny.en` for `[stt] model` |
 | No sound, but text appears | The browser blocked autoplay. Click anywhere on the page once, or use the replay player |
 | Windows "symlinks" warning on first run | Harmless (Hugging Face cache); enable Developer Mode to silence it |
+# voice-chat-agent
