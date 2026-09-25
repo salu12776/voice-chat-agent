@@ -1,0 +1,7 @@
+# Online demo on Render (lightweight: no local speech models)
+gradio>=6.28.0
+numpy
+soundfile>=0.12.1
+httpx
+ollama>=0.6.2
+edge-tts

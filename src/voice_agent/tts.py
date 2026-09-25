@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import re
 import threading
 import urllib.request
@@ -69,6 +71,7 @@ class SentenceSplitter:
                 continue
             sentences.append(self.buffer[start : match.end()].strip())
             start = match.end()
+
         self.buffer = self.buffer[start:]
 
         if not self.emitted and not sentences:
@@ -76,11 +79,12 @@ class SentenceSplitter:
             if cut:
                 sentences.append(self.buffer[: cut.end()].strip())
                 self.buffer = self.buffer[cut.end() :]
-        elif len(self.buffer) > self.max_chars:
-            cuts = list(_SOFT_BOUNDARY.finditer(self.buffer, 0, self.max_chars))
-            if cuts and cuts[-1].end() >= self.min_chars:
-                sentences.append(self.buffer[: cuts[-1].end()].strip())
-                self.buffer = self.buffer[cuts[-1].end() :]
+            elif len(self.buffer) > self.max_chars:
+                cuts = list(_SOFT_BOUNDARY.finditer(self.buffer, 0, self.max_chars))
+                if cuts and cuts[-1].end() >= self.min_chars:
+                    sentences.append(self.buffer[: cuts[-1].end()].strip())
+                    self.buffer = self.buffer[cuts[-1].end() :]
+
         self.emitted += len(sentences)
         return sentences
 
@@ -126,7 +130,7 @@ class KokoroTTS:
                     self._engine = Kokoro(str(self.model_path), str(self.voices_path))
                 except Exception as exc:
                     raise TTSError(f"Couldn't load Kokoro TTS: {exc}") from exc
-            return self._engine
+        return self._engine
 
     def voices(self) -> list[str]:
         return sorted(self.load().get_voices())
@@ -178,9 +182,51 @@ class PiperTTS:
         return chunks[0].sample_rate, samples
 
 
+class EdgeTTS:
+    """Microsoft Edge online voices via the `edge-tts` package. No model on the server, so it fits
+    a small free instance. Used for the online demo only; the local app keeps Kokoro."""
+
+    VOICES = [
+        "en-US-AvaNeural", "en-US-AndrewNeural", "en-US-EmmaNeural", "en-US-BrianNeural",
+        "en-US-AriaNeural", "en-US-GuyNeural", "en-GB-SoniaNeural", "en-GB-RyanNeural",
+    ]
+
+    def __init__(self, config: TTSConfig) -> None:
+        self.config = config
+
+    def voices(self) -> list[str]:
+        return list(self.VOICES)
+
+    def synthesize(self, text: str, voice: str | None = None, speed: float | None = None) -> Audio:
+        import edge_tts  # only needed for the online demo
+        import soundfile as sf
+
+        text = clean_for_speech(text)
+        if not text:
+            return 24000, np.zeros(0, dtype=np.float32)
+        voice = voice if voice in self.VOICES else self.VOICES[0]
+        rate = f"{round(((speed or self.config.speed) - 1) * 100):+d}%"
+
+        async def _run() -> bytes:
+            buf = io.BytesIO()
+            async for chunk in edge_tts.Communicate(text, voice, rate=rate).stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            return buf.getvalue()
+
+        try:
+            mp3 = asyncio.run(_run())  # runs in the TTS worker thread, which has no event loop
+            samples, sample_rate = sf.read(io.BytesIO(mp3), dtype="float32")
+        except Exception as exc:
+            raise TTSError(f"Speech synthesis failed: {exc}") from exc
+        if samples.ndim > 1:
+            samples = samples.mean(axis=1)
+        return sample_rate, samples
+
+
 def create_tts(config: TTSConfig) -> TTSEngine:
     """Build the engine named in config.tts.engine."""
-    engines = {"kokoro": KokoroTTS, "piper": PiperTTS}
+    engines = {"kokoro": KokoroTTS, "piper": PiperTTS, "edge": EdgeTTS}
     if config.engine not in engines:
         raise TTSError(f"Unknown TTS engine `{config.engine}`. Choose one of: {', '.join(engines)}.")
     return engines[config.engine](config)

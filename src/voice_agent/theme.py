@@ -173,6 +173,9 @@ footer { display: none !important; }
 #mic .stop-button::before { background: #fff !important; border-radius: 3px !important; width: 14px !important; height: 14px !important; margin: 0 !important; }
 @keyframes va-ring { 0%,100% { box-shadow: 0 0 0 4px rgba(239,68,68,0.2); } 50% { box-shadow: 0 0 0 12px rgba(239,68,68,0.06); } }
 #mic .mic-select { max-width: 100%; }
+/* Gradio disables the device picker and labels it "No microphone found" until the site has mic permission
+   (browsers hide device ids before that). It's a false alarm, so hide it until real devices are listed. */
+#mic .mic-select:disabled { display: none; }
 
 #text-col { gap: 10px; }
 #text-input textarea { font-size: 1rem !important; }

@@ -1,7 +1,9 @@
-"""Ollama client: health checks, model listing, history trimming and streaming chat."""
+"""LLM clients: Ollama (local) and Groq (hosted), with the same small interface."""
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 
@@ -14,7 +16,7 @@ Message = dict[str, str]
 
 
 class LLMError(RuntimeError):
-    """A user-facing problem talking to Ollama."""
+    """A user-facing problem talking to the language model."""
 
 
 @dataclass
@@ -24,8 +26,15 @@ class HealthStatus:
     models: list[str]
 
 
+def build_messages(history: list[Message], user_text: str, system_prompt: str, config: LLMConfig) -> list[Message]:
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += trim_history(history, config.max_history_turns, config.max_history_chars)
+    messages.append({"role": "user", "content": user_text})
+    return messages
+
+
 class OllamaLLM:
-    """Thin wrapper around the official `ollama` client."""
+    """Thin wrapper around the official `ollama` client (runs on your own computer)."""
 
     def __init__(self, config: LLMConfig) -> None:
         self.config = config
@@ -66,9 +75,7 @@ class OllamaLLM:
         temperature: float | None = None,
     ) -> Iterator[str]:
         """Stream the reply to `user_text`, yielding text chunks as they arrive."""
-        messages = [{"role": "system", "content": system_prompt}]
-        messages += trim_history(history, self.config.max_history_turns, self.config.max_history_chars)
-        messages.append({"role": "user", "content": user_text})
+        messages = build_messages(history, user_text, system_prompt, self.config)
         model = model or self.config.model
         try:
             stream = self.client.chat(
@@ -86,6 +93,82 @@ class OllamaLLM:
             if exc.status_code == 404:
                 raise LLMError(f"Model `{model}` isn't installed. Run `ollama pull {model}`.") from exc
             raise LLMError(f"Ollama error: {exc.error}") from exc
+
+
+class GroqLLM:
+    """Hosted model on Groq (OpenAI-compatible API). Used for the public online demo.
+
+    The API key is read from the GROQ_API_KEY environment variable (a Space secret), never from code.
+    Only the configured model is exposed, so visitors can't switch to other (paid or larger) models.
+    """
+
+    BASE_URL = "https://api.groq.com/openai/v1"
+    MAX_TOKENS = 300  # voice replies are short; also keeps usage low
+
+    def __init__(self, config: LLMConfig) -> None:
+        self.config = config
+        self.api_key = os.environ.get("GROQ_API_KEY", "").strip()
+        self.client = httpx.Client(
+            base_url=self.BASE_URL,
+            timeout=httpx.Timeout(20.0, read=60.0),
+            headers={"Authorization": f"Bearer {self.api_key}"},
+        )
+
+    def list_models(self) -> list[str]:
+        return [self.config.model]
+
+    def health(self, model: str | None = None) -> HealthStatus:
+        if not self.api_key:
+            return HealthStatus(False, "GROQ_API_KEY is missing. Add it as a secret in the Space settings.", [])
+        return HealthStatus(True, f"Online demo · {self.config.model} on Groq", [self.config.model])
+
+    def stream_chat(
+        self,
+        history: list[Message],
+        user_text: str,
+        system_prompt: str,
+        model: str | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        if not self.api_key:
+            raise LLMError("The online demo isn't configured yet (missing API key).")
+        payload = {
+            "model": self.config.model,
+            "messages": build_messages(history, user_text, system_prompt, self.config),
+            "stream": True,
+            "temperature": self.config.temperature if temperature is None else temperature,
+            "max_tokens": self.MAX_TOKENS,
+        }
+        try:
+            with self.client.stream("POST", "/chat/completions", json=payload) as response:
+                if response.status_code == 429:
+                    raise LLMError("Lots of people are talking to me right now. Please try again in a few seconds.")
+                if response.status_code >= 400:
+                    response.read()
+                    print(f"Groq error {response.status_code}: {response.text[:300]}")  # visible in Space logs
+                    raise LLMError("The language model returned an error. Please try again.")
+                for line in response.iter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        delta = json.loads(data)["choices"][0].get("delta", {}).get("content")
+                    except (ValueError, KeyError, IndexError):
+                        continue
+                    if delta:
+                        yield delta
+        except httpx.HTTPError as exc:
+            print(f"Groq connection error: {exc}")
+            raise LLMError("Couldn't reach the language model. Please try again in a moment.") from exc
+
+
+def create_llm(config: LLMConfig):
+    """Pick the client from config.llm.provider: "ollama" (local) or "groq" (online demo)."""
+    if config.provider == "groq":
+        return GroqLLM(config)
+    return OllamaLLM(config)
 
 
 def _has_model(models: list[str], name: str) -> bool:

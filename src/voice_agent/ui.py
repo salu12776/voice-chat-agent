@@ -16,9 +16,9 @@ import numpy as np
 import soundfile as sf
 
 from .config import Config
-from .llm import LLMError, Message, OllamaLLM
+from .llm import LLMError, Message, create_llm
 from .pipeline import stream_reply
-from .stt import STTError, WhisperSTT
+from .stt import STTError, create_stt
 from .tts import Audio, TTSEngine, TTSError, create_tts
 
 # Outputs shared by every conversation turn, in wiring order.
@@ -65,10 +65,16 @@ def banner_html(message: str | None) -> str:
 
 
 def voice_choices(voices: list[str]) -> list[tuple[str, str]]:
-    """Friendly labels such as 'Heart — US English · female'."""
-    return [
-        (f"{v.split('_', 1)[-1].title()} — {VOICE_GROUPS.get(v[:2], v[:2])}", v) for v in voices
-    ]
+    """Friendly labels such as 'Heart — US English · female' (Kokoro) or 'Ava — US English' (online voices)."""
+    labels = []
+    for v in voices:
+        if v.endswith("Neural"):  # edge-tts voice id like en-US-AvaNeural
+            lang, name = v.rsplit("-", 1)
+            region = {"en-US": "US English", "en-GB": "UK English"}.get(lang, lang)
+            labels.append((f"{name.removesuffix('Neural')} — {region}", v))
+        else:
+            labels.append((f"{v.split('_', 1)[-1].title()} — {VOICE_GROUPS.get(v[:2], v[:2])}", v))
+    return labels
 
 
 def to_int16(samples: np.ndarray) -> np.ndarray:
@@ -99,8 +105,8 @@ class VoiceAgentApp:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.llm = OllamaLLM(config.llm)
-        self.stt = WhisperSTT(config.stt)
+        self.llm = create_llm(config.llm)  # Ollama locally, Groq on the online demo
+        self.stt = create_stt(config.stt)
         self.tts: TTSEngine = create_tts(config.tts)
 
     def warm_up(self) -> None:
@@ -119,7 +125,7 @@ class VoiceAgentApp:
     # ---------- event handlers ----------
 
     def check_health(self, model: str | None) -> tuple[str, dict[str, Any]]:
-        """Refresh the banner and model dropdown from Ollama."""
+        """Refresh the banner and model dropdown from the language model."""
         health = self.llm.health(model or self.config.llm.model)
         choices = health.models or [model or self.config.llm.model]
         value = model if model in choices else (
@@ -312,7 +318,7 @@ class VoiceAgentApp:
                     with gr.Row():
                         model_dd = gr.Dropdown(
                             label="Model", choices=[cfg.llm.model], value=cfg.llm.model, scale=4,
-                            info="Installed Ollama models",
+                            info="Installed Ollama models" if cfg.llm.provider == "ollama" else "Hosted model (online demo)",
                         )
                         refresh_btn = gr.Button("↻", elem_id="refresh-btn", scale=0, min_width=52)
                     temperature = gr.Slider(
